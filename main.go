@@ -8,46 +8,55 @@ import (
 )
 
 var (
-	user32                  = syscall.NewLazyDLL("user32.dll")
-	procFindWindowW         = user32.NewProc("FindWindowW")
-	procSetForegroundWindow = user32.NewProc("SetForegroundWindow")
-	procIsIconic            = user32.NewProc("IsIconic") // Checks if minimized
-	procShowWindow          = user32.NewProc("ShowWindow")
+	user32           = syscall.NewLazyDLL("user32.dll")
+	procFindWindowW  = user32.NewProc("FindWindowW")
+	procIsIconic     = user32.NewProc("IsIconic")
+	procShowWindow   = user32.NewProc("ShowWindow")
+	procSetWindowPos = user32.NewProc("SetWindowPos")
 )
 
-const SW_RESTORE = 9
-const WIN_TITLE = "ER WorkFlow Panel"
+const (
+	WIN_TITLE  = "ER WorkFlow Panel"
+	SW_RESTORE = 9
+
+	// SetWindowPos Flags
+	HWND_TOPMOST   = ^uintptr(0) // -1: Places window above all non-topmost windows
+	SWP_NOSIZE     = 0x0001      // Retains current size
+	SWP_NOMOVE     = 0x0002      // Retains current position
+	SWP_NOACTIVATE = 0x0010      // Does NOT activate the window (no focus steal)
+	SWP_SHOWWINDOW = 0x0040      // Displays the window
+)
 
 func main() {
-	windowTitle := WIN_TITLE  // Change this to your target title
-	fmt.Printf("Watching for: %s\n", windowTitle)
-	fmt.Println("Click the [X] in the upper right to quit, or press Ctrl-C.\n")
+	fmt.Printf("Watching for: %s\n", WIN_TITLE)
+	fmt.Println("Pinned to 'Always on Top' without focus theft.")
+	fmt.Println("Press Ctrl-C to quit.\n")
 
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		// Convert Go string to UTF-16 pointer
-		titlePtr, _ := syscall.UTF16PtrFromString(windowTitle)
+		titlePtr, _ := syscall.UTF16PtrFromString(WIN_TITLE)
 
 		// 1. Find the window handle (HWND)
-		// FindWindowW(lpClassName, lpWindowName)
 		hwnd, _, _ := procFindWindowW.Call(0, uintptr(unsafe.Pointer(titlePtr)))
 
 		if hwnd != 0 {
-			// fmt.Println("ER window appeared.")
-			// 2. Check if it's minimized (Iconic)
+			// 2. Check if it's minimized; restore if necessary
 			minimized, _, _ := procIsIconic.Call(hwnd)
 			if minimized != 0 {
-				// Restore it if it's minimized
 				procShowWindow.Call(hwnd, SW_RESTORE)
 			}
 
-			// 3. Bring to front
-			success, _, _ := procSetForegroundWindow.Call(hwnd)
-			if success != 0 {
-				// fmt.Println("Window raised!")
-			}
+			// 3. Set to Always on Top (HWND_TOPMOST) 
+			// and ensure focus isn't stolen (SWP_NOACTIVATE)
+			procSetWindowPos.Call(
+				hwnd,
+				HWND_TOPMOST,
+				0, 0, 0, 0,
+				SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE|SWP_SHOWWINDOW,
+			)
 		}
 	}
 }
