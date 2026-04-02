@@ -29,8 +29,9 @@ const (
 
 func main() {
 	fmt.Printf("Watching for: %s\n", WIN_TITLE)
-	fmt.Println("Pinned to 'Always on Top' without focus theft.")
-	fmt.Println("Press Ctrl-C to quit.\n")
+	fmt.Println("Pinned to 'Always on Top'.\n")
+	fmt.Println("If you close this window, the program will quit, but it's ok to minimize it to the taskbar.\n")
+	fmt.Println("To quit, press Ctrl-C, or click the [X] in the top right corner.\n")
 
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
