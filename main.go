@@ -196,6 +196,7 @@ func main() {
 				raiseWindow(findWindowByPrefix("Report Viewer:"))
 			case VK_F7:
 				raiseWindow(findWindowByPrefix("Merge RealTime"))
+				raiseWindow(findWindowByPrefix("RealTime"))
 			}
 		}
 	}
