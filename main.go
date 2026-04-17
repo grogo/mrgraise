@@ -50,7 +50,7 @@ func main() {
 				procShowWindow.Call(hwnd, SW_RESTORE)
 			}
 
-			// 3. Set to Always on Top (HWND_TOPMOST) 
+			// 3. Set to Always on Top (HWND_TOPMOST)
 			// and ensure focus isn't stolen (SWP_NOACTIVATE)
 			procSetWindowPos.Call(
 				hwnd,
