@@ -8,4 +8,5 @@ vet: fmt
 	go vet ./...
 
 build: vet
-	GOOS=windows GOARCH=amd64 go build -o mrgraise.exe main.go
+#GOOS=windows GOARCH=amd64 go build -o mrgraise.exe main.go
+	go build -o mrgraise.exe main.go

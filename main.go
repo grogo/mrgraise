@@ -172,7 +172,7 @@ func runKeyboardHook() {
 
 func main() {
 	fmt.Printf("Pinning to top: %s\n", WIN_TITLE)
-	fmt.Println("Hotkeys: F5 = Order Viewer, F6 = Report Viewer, F7 = Patient Record")
+	fmt.Println("Hotkeys: F6 = Report Viewer, F6 = Order Viewer, F7 = Patient Record/Worklist")
 	fmt.Println()
 	fmt.Println("If you close this window, the program will quit, but it's ok to minimize it to the taskbar.")
 	fmt.Println()
@@ -190,12 +190,12 @@ func main() {
 			pinTop(findWindowExact(WIN_TITLE))
 		case vk := <-keyEvents:
 			switch vk {
-			case VK_F5:
-				raiseWindow(findWindowByPrefix("Order Viewer:"))
 			case VK_F6:
+				raiseWindow(findWindowByPrefix("Order Viewer:"))
+			case VK_F5:
 				raiseWindow(findWindowByPrefix("Report Viewer:"))
 			case VK_F7:
-				raiseWindow(findWindowByPrefix("Patient Record"))
+				raiseWindow(findWindowByPrefix("Merge RealTime"))
 			}
 		}
 	}
