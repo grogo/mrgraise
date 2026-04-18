@@ -172,7 +172,7 @@ func runKeyboardHook() {
 
 func main() {
 	fmt.Printf("Pinning to top: %s\n", WIN_TITLE)
-	fmt.Println("Hotkeys: \nF5 = Report Viewer, \nF6 = Order Viewer, \nF7 = Patient Record/Worklist")
+	fmt.Println("\nHotkeys: \nF5 = Report Viewer, \nF6 = Order Viewer, \nF7 = Patient Record/Worklist")
 	fmt.Println()
 	fmt.Println("If you close this window, the program will quit, but it's ok to minimize it to the taskbar.")
 	fmt.Println()
