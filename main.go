@@ -151,12 +151,28 @@ func keyboardHookProc(nCode uintptr, wParam uintptr, lParam uintptr) uintptr {
 
 var hookCallback = syscall.NewCallback(keyboardHookProc)
 
+func keyboardHookProcF5(nCode uintptr, wParam uintptr, lParam uintptr) uintptr {
+	if int32(nCode) == 0 && (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
+		k := *(**kbdllhookstruct)(unsafe.Pointer(&lParam))
+		if k.vkCode == VK_F5 {
+			select {
+			case keyEvents <- k.vkCode:
+			default:
+			}
+		}
+	}
+	ret, _, _ := procCallNextHookEx.Call(0, nCode, wParam, lParam)
+	return ret
+}
+
+var hookCallbackF5 = syscall.NewCallback(keyboardHookProcF5)
+
 // runKeyboardHook installs a low-level keyboard hook and pumps messages
 // so Windows can dispatch hook callbacks to this thread. The hook only
 // observes keys — it does not swallow them.
 func runKeyboardHook() {
 	runtime.LockOSThread()
-	h, _, err := procSetWindowsHookExW.Call(WH_KEYBOARD_LL, hookCallback, 0, 0)
+	h, _, err := procSetWindowsHookExW.Call(WH_KEYBOARD_LL, hookCallbackF5, 0, 0)
 	if h == 0 {
 		fmt.Printf("failed to install keyboard hook: %v\n", err)
 		return
@@ -172,7 +188,8 @@ func runKeyboardHook() {
 
 func main() {
 	fmt.Printf("Pinning to top: %s\n", WIN_TITLE)
-	fmt.Println("\nHotkeys: \nF5 = Report Viewer, \nF6 = Order Viewer, \nF7 = Patient Record/Worklist")
+	fmt.Println()
+	fmt.Println("Hotkey: F5 cycles through Report Viewer, Order Viewer, and Patient Record/Worklist.")
 	fmt.Println()
 	fmt.Println("If you close this window, the program will quit, but it's ok to minimize it to the taskbar.")
 	fmt.Println()
@@ -184,20 +201,22 @@ func main() {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
+	cycle := 0
 	for {
 		select {
 		case <-ticker.C:
 			pinTop(findWindowExact(WIN_TITLE))
-		case vk := <-keyEvents:
-			switch vk {
-			case VK_F6:
-				raiseWindow(findWindowByPrefix("Order Viewer:"))
-			case VK_F5:
+		case <-keyEvents:
+			switch cycle {
+			case 0:
 				raiseWindow(findWindowByPrefix("Report Viewer:"))
-			case VK_F7:
+			case 1:
+				raiseWindow(findWindowByPrefix("Order Viewer:"))
+			case 2:
 				raiseWindow(findWindowByPrefix("Merge RealTime"))
 				raiseWindow(findWindowByPrefix("RealTime"))
 			}
+			cycle = (cycle + 1) % 3
 		}
 	}
 }
