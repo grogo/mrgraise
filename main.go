@@ -54,8 +54,8 @@ type kbdllhookstruct struct {
 // enumProc state — mutated only while EnumWindows is running on the
 // main goroutine, so no synchronization is needed.
 var (
-	searchPrefix []uint16
-	searchResult uintptr
+	searchPrefix  []uint16
+	searchResults []uintptr
 )
 
 func enumProc(hwnd uintptr, _ uintptr) uintptr {
@@ -69,23 +69,34 @@ func enumProc(hwnd uintptr, _ uintptr) uintptr {
 			return 1
 		}
 	}
-	searchResult = hwnd
-	return 0 // stop
+	searchResults = append(searchResults, hwnd)
+	return 1 // continue — collect every match
 }
 
 var enumCallback = syscall.NewCallback(enumProc)
 
-// findWindowByPrefix returns the first top-level window whose title
-// starts with the given prefix, or 0 if none is found.
-func findWindowByPrefix(prefix string) uintptr {
+// findAllWindowsByPrefix returns every top-level window whose title
+// starts with the given prefix, in EnumWindows order. Returns nil if
+// none match.
+func findAllWindowsByPrefix(prefix string) []uintptr {
 	utf16, _ := syscall.UTF16FromString(prefix)
 	if len(utf16) > 0 && utf16[len(utf16)-1] == 0 {
 		utf16 = utf16[:len(utf16)-1]
 	}
 	searchPrefix = utf16
-	searchResult = 0
+	searchResults = nil
 	procEnumWindows.Call(enumCallback, 0)
-	return searchResult
+	return searchResults
+}
+
+// findWindowByPrefix returns the first top-level window whose title
+// starts with the given prefix, or 0 if none is found.
+func findWindowByPrefix(prefix string) uintptr {
+	all := findAllWindowsByPrefix(prefix)
+	if len(all) == 0 {
+		return 0
+	}
+	return all[0]
 }
 
 func findWindowExact(title string) uintptr {
@@ -214,7 +225,9 @@ func main() {
 				raiseWindow(findWindowByPrefix("Order Viewer:"))
 			case 2:
 				raiseWindow(findWindowByPrefix("Merge RealTime"))
-				raiseWindow(findWindowByPrefix("RealTime"))
+				for _, hwnd := range findAllWindowsByPrefix("Merge") {
+					raiseWindow(hwnd)
+				}
 			}
 			cycle = (cycle + 1) % 3
 		}
