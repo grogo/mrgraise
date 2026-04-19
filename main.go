@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 import (
@@ -212,24 +214,25 @@ func main() {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
+	cycleSteps := []func(){
+		func() { raiseWindow(findWindowByPrefix("Report Viewer:")) },
+		func() { raiseWindow(findWindowByPrefix("Order Viewer:")) },
+		func() {
+			raiseWindow(findWindowByPrefix("Merge RealTime"))
+			for _, hwnd := range findAllWindowsByPrefix("Merge") {
+				raiseWindow(hwnd)
+			}
+		},
+	}
+
 	cycle := 0
 	for {
 		select {
 		case <-ticker.C:
 			pinTop(findWindowExact(WIN_TITLE))
 		case <-keyEvents:
-			switch cycle {
-			case 0:
-				raiseWindow(findWindowByPrefix("Report Viewer:"))
-			case 1:
-				raiseWindow(findWindowByPrefix("Order Viewer:"))
-			case 2:
-				raiseWindow(findWindowByPrefix("Merge RealTime"))
-				for _, hwnd := range findAllWindowsByPrefix("Merge") {
-					raiseWindow(hwnd)
-				}
-			}
-			cycle = (cycle + 1) % 3
+			cycleSteps[cycle]()
+			cycle = (cycle + 1) % len(cycleSteps)
 		}
 	}
 }
