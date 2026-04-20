@@ -30,6 +30,7 @@ var (
 	procSetClipboardData    = user32.NewProc("SetClipboardData")
 	procCloseClipboard      = user32.NewProc("CloseClipboard")
 	procMessageBoxW         = user32.NewProc("MessageBoxW")
+	procMessageBeep         = user32.NewProc("MessageBeep")
 	procGlobalAlloc         = kernel32.NewProc("GlobalAlloc")
 	procGlobalLock          = kernel32.NewProc("GlobalLock")
 	procGlobalUnlock        = kernel32.NewProc("GlobalUnlock")
@@ -61,6 +62,7 @@ const (
 
 	MB_OK        = 0x00000000
 	MB_ICONERROR = 0x00000010
+	MB_TOPMOST   = 0x00040000
 )
 
 type kbdllhookstruct struct {
@@ -135,11 +137,17 @@ func getWindowText(hwnd uintptr) string {
 // ACC field format: NN-TT-NN-NNNNNN (digits-letters-digits-digits).
 var accRe = regexp.MustCompile(`^\d{2}-[A-Za-z]{2}-\d{2}-\d{6}$`)
 
+// Service-date field format: MM/DD/YYYY (1- or 2-digit month/day).
+var dateRe = regexp.MustCompile(`^\d{1,2}/\d{1,2}/\d{4}$`)
+
 // parseOrderViewerTitle pulls the patient fields out of an Order Viewer
 // title bar. Name/DOB/Loc/MRN are positional (fields 0..3 of the
-// pipe-separated layout); ACC is located by pattern because its
-// position varies. Any field that cannot be found is returned empty.
-func parseOrderViewerTitle(title string) (name, dob, loc, mrn, acc string) {
+// pipe-separated layout). ACC and service date are located by pattern
+// because their positions vary; the scan starts at field 4 so DOB
+// cannot be mistaken for the service date. Exam type sits next-to-last
+// in a populated title. Any field that cannot be found is returned
+// empty.
+func parseOrderViewerTitle(title string) (name, dob, loc, mrn, date, acc, exam string) {
 	parts := strings.Split(title, "|")
 	for i, p := range parts {
 		parts[i] = strings.TrimSpace(p)
@@ -156,11 +164,19 @@ func parseOrderViewerTitle(title string) (name, dob, loc, mrn, acc string) {
 	if len(parts) > 3 {
 		mrn = parts[3]
 	}
-	for _, p := range parts {
-		if accRe.MatchString(p) {
+	for i := 4; i < len(parts); i++ {
+		p := parts[i]
+		if acc == "" && accRe.MatchString(p) {
 			acc = p
-			break
 		}
+		if date == "" && dateRe.MatchString(p) {
+			date = p
+		}
+	}
+	// Exam needs room for Name/DOB/Loc/MRN plus at least exam + trailing
+	// modality, so require ≥6 fields before treating next-to-last as exam.
+	if len(parts) >= 6 {
+		exam = parts[len(parts)-2]
 	}
 	return
 }
@@ -212,7 +228,7 @@ func showError(msg string) {
 		0,
 		uintptr(unsafe.Pointer(body)),
 		uintptr(unsafe.Pointer(title)),
-		MB_OK|MB_ICONERROR,
+		MB_OK|MB_ICONERROR|MB_TOPMOST,
 	)
 }
 
@@ -224,14 +240,16 @@ func showError(msg string) {
 func copyOrderInfoToClipboard() {
 	hwnd := findWindowByPrefix("Order Viewer:")
 	if hwnd == 0 {
-		showError("Order Viewer window not found.")
+		showError("Warning: F6 copy failed because Order Viewer window not found. Please open the Order Viewer window in Merge first.")
 		return
 	}
-	name, dob, loc, mrn, acc := parseOrderViewerTitle(getWindowText(hwnd))
-	record := strings.Join([]string{name, dob, loc, mrn, acc}, ";")
+	name, dob, loc, mrn, date, acc, exam := parseOrderViewerTitle(getWindowText(hwnd))
+	record := strings.Join([]string{name, dob, loc, mrn, date, acc, exam}, ";")
 	if err := setClipboardText(record); err != nil {
 		showError("Clipboard error: " + err.Error())
+		return
 	}
+	procMessageBeep.Call(MB_OK)
 }
 
 func restoreIfMinimized(hwnd uintptr) {
@@ -330,7 +348,7 @@ func main() {
 	fmt.Printf("Pinning to top: %s\n", WIN_TITLE)
 	fmt.Println()
 	fmt.Println("Hotkey: F5 cycles through Report Viewer, Order Viewer, and Patient Record/Worklist.")
-	fmt.Println("Hotkey: F6 copies patient info (Name;DOB;Loc;MRN;ACC) from Order Viewer to the clipboard.")
+	fmt.Println("Hotkey: F6 copies patient info (Name;DOB;Loc;MRN;Date;ACC;Exam) from Order Viewer to the clipboard.")
 	fmt.Println()
 	fmt.Println("If you close this window, the program will quit, but it's ok to minimize it to the taskbar.")
 	fmt.Println()
