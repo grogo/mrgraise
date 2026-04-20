@@ -4,7 +4,9 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -12,6 +14,7 @@ import (
 
 var (
 	user32                  = syscall.NewLazyDLL("user32.dll")
+	kernel32                = syscall.NewLazyDLL("kernel32.dll")
 	procFindWindowW         = user32.NewProc("FindWindowW")
 	procIsIconic            = user32.NewProc("IsIconic")
 	procShowWindow          = user32.NewProc("ShowWindow")
@@ -22,6 +25,15 @@ var (
 	procCallNextHookEx      = user32.NewProc("CallNextHookEx")
 	procGetMessageW         = user32.NewProc("GetMessageW")
 	procSetForegroundWindow = user32.NewProc("SetForegroundWindow")
+	procOpenClipboard       = user32.NewProc("OpenClipboard")
+	procEmptyClipboard      = user32.NewProc("EmptyClipboard")
+	procSetClipboardData    = user32.NewProc("SetClipboardData")
+	procCloseClipboard      = user32.NewProc("CloseClipboard")
+	procMessageBoxW         = user32.NewProc("MessageBoxW")
+	procGlobalAlloc         = kernel32.NewProc("GlobalAlloc")
+	procGlobalLock          = kernel32.NewProc("GlobalLock")
+	procGlobalUnlock        = kernel32.NewProc("GlobalUnlock")
+	procGlobalFree          = kernel32.NewProc("GlobalFree")
 )
 
 const (
@@ -43,6 +55,12 @@ const (
 	VK_F5 = 0x74
 	VK_F6 = 0x75
 	VK_F7 = 0x76
+
+	CF_UNICODETEXT = 13
+	GMEM_MOVEABLE  = 0x0002
+
+	MB_OK        = 0x00000000
+	MB_ICONERROR = 0x00000010
 )
 
 type kbdllhookstruct struct {
@@ -105,6 +123,115 @@ func findWindowExact(title string) uintptr {
 	titlePtr, _ := syscall.UTF16PtrFromString(title)
 	hwnd, _, _ := procFindWindowW.Call(0, uintptr(unsafe.Pointer(titlePtr)))
 	return hwnd
+}
+
+// getWindowText returns the title of hwnd as a Go string.
+func getWindowText(hwnd uintptr) string {
+	var buf [512]uint16
+	n, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	return syscall.UTF16ToString(buf[:n])
+}
+
+// ACC field format: NN-TT-NN-NNNNNN (digits-letters-digits-digits).
+var accRe = regexp.MustCompile(`^\d{2}-[A-Za-z]{2}-\d{2}-\d{6}$`)
+
+// parseOrderViewerTitle pulls the patient fields out of an Order Viewer
+// title bar. Name/DOB/Loc/MRN are positional (fields 0..3 of the
+// pipe-separated layout); ACC is located by pattern because its
+// position varies. Any field that cannot be found is returned empty.
+func parseOrderViewerTitle(title string) (name, dob, loc, mrn, acc string) {
+	parts := strings.Split(title, "|")
+	for i, p := range parts {
+		parts[i] = strings.TrimSpace(p)
+	}
+	if len(parts) > 0 {
+		name = strings.TrimSpace(strings.TrimPrefix(parts[0], "Order Viewer:"))
+	}
+	if len(parts) > 1 {
+		dob = parts[1]
+	}
+	if len(parts) > 2 {
+		loc = parts[2]
+	}
+	if len(parts) > 3 {
+		mrn = parts[3]
+	}
+	for _, p := range parts {
+		if accRe.MatchString(p) {
+			acc = p
+			break
+		}
+	}
+	return
+}
+
+// setClipboardText places text on the Windows clipboard as
+// CF_UNICODETEXT. On success the global memory block is owned by the
+// clipboard and must not be freed here.
+func setClipboardText(text string) error {
+	utf16, err := syscall.UTF16FromString(text)
+	if err != nil {
+		return err
+	}
+	if r, _, _ := procOpenClipboard.Call(0); r == 0 {
+		return fmt.Errorf("OpenClipboard failed")
+	}
+	defer procCloseClipboard.Call()
+
+	procEmptyClipboard.Call()
+
+	hMem, _, _ := procGlobalAlloc.Call(GMEM_MOVEABLE, uintptr(len(utf16)*2))
+	if hMem == 0 {
+		return fmt.Errorf("GlobalAlloc failed")
+	}
+	ptr, _, _ := procGlobalLock.Call(hMem)
+	if ptr == 0 {
+		procGlobalFree.Call(hMem)
+		return fmt.Errorf("GlobalLock failed")
+	}
+	// Reinterpret ptr (a uintptr holding a pointer) as *uint16 via
+	// &ptr — same pattern used for the kbdllhookstruct lParam above,
+	// to avoid vet's unsafe.Pointer(uintptr) warning.
+	dst := unsafe.Slice(*(**uint16)(unsafe.Pointer(&ptr)), len(utf16))
+	copy(dst, utf16)
+	procGlobalUnlock.Call(hMem)
+
+	if r, _, _ := procSetClipboardData.Call(CF_UNICODETEXT, hMem); r == 0 {
+		procGlobalFree.Call(hMem)
+		return fmt.Errorf("SetClipboardData failed")
+	}
+	return nil
+}
+
+// showError displays a Windows modal error dialog. Blocks until the
+// user dismisses it.
+func showError(msg string) {
+	title, _ := syscall.UTF16PtrFromString("mrgraise")
+	body, _ := syscall.UTF16PtrFromString(msg)
+	procMessageBoxW.Call(
+		0,
+		uintptr(unsafe.Pointer(body)),
+		uintptr(unsafe.Pointer(title)),
+		MB_OK|MB_ICONERROR,
+	)
+}
+
+// copyOrderInfoToClipboard locates the Order Viewer window, pulls the
+// patient fields from its title bar, and writes them to the clipboard
+// as a semicolon-separated record (Name;DOB;Loc;MRN;ACC). Shows a
+// Windows error dialog if the window is not open or the clipboard call
+// fails.
+func copyOrderInfoToClipboard() {
+	hwnd := findWindowByPrefix("Order Viewer:")
+	if hwnd == 0 {
+		showError("Order Viewer window not found.")
+		return
+	}
+	name, dob, loc, mrn, acc := parseOrderViewerTitle(getWindowText(hwnd))
+	record := strings.Join([]string{name, dob, loc, mrn, acc}, ";")
+	if err := setClipboardText(record); err != nil {
+		showError("Clipboard error: " + err.Error())
+	}
 }
 
 func restoreIfMinimized(hwnd uintptr) {
@@ -185,7 +312,7 @@ var hookCallbackF5 = syscall.NewCallback(keyboardHookProcF5)
 // observes keys — it does not swallow them.
 func runKeyboardHook() {
 	runtime.LockOSThread()
-	h, _, err := procSetWindowsHookExW.Call(WH_KEYBOARD_LL, hookCallbackF5, 0, 0)
+	h, _, err := procSetWindowsHookExW.Call(WH_KEYBOARD_LL, hookCallback, 0, 0)
 	if h == 0 {
 		fmt.Printf("failed to install keyboard hook: %v\n", err)
 		return
@@ -203,6 +330,7 @@ func main() {
 	fmt.Printf("Pinning to top: %s\n", WIN_TITLE)
 	fmt.Println()
 	fmt.Println("Hotkey: F5 cycles through Report Viewer, Order Viewer, and Patient Record/Worklist.")
+	fmt.Println("Hotkey: F6 copies patient info (Name;DOB;Loc;MRN;ACC) from Order Viewer to the clipboard.")
 	fmt.Println()
 	fmt.Println("If you close this window, the program will quit, but it's ok to minimize it to the taskbar.")
 	fmt.Println()
@@ -230,9 +358,14 @@ func main() {
 		select {
 		case <-ticker.C:
 			pinTop(findWindowExact(WIN_TITLE))
-		case <-keyEvents:
-			cycleSteps[cycle]()
-			cycle = (cycle + 1) % len(cycleSteps)
+		case vk := <-keyEvents:
+			switch vk {
+			case VK_F5:
+				cycleSteps[cycle]()
+				cycle = (cycle + 1) % len(cycleSteps)
+			case VK_F6:
+				copyOrderInfoToClipboard()
+			}
 		}
 	}
 }
