@@ -347,10 +347,12 @@ func runKeyboardHook() {
 func main() {
 	fmt.Printf("Pinning to top: %s\n", WIN_TITLE)
 	fmt.Println()
-	fmt.Println("Hotkey: F5 cycles through Report Viewer, Order Viewer, and Patient Record/Worklist.")
+	fmt.Println(`Hotkey: F5 cycles through Report Viewer, Order Viewer, and Patient Record/Worklist. 
+In order for this shortcut to work, enable 'Auto Open Order Viewer', 'Auto Open Report Viewer', and 'Auto Open ER Panel' in Preferences->Start-up.`)
+	fmt.Println()		
 	fmt.Println("Hotkey: F6 copies patient info (Name;DOB;Loc;MRN;Date;ACC;Exam) from Order Viewer to the clipboard.")
 	fmt.Println()
-	fmt.Println("If you close this window, the program will quit, but it's ok to minimize it to the taskbar.")
+	fmt.Println("It's ok to minimize this window to the task bar, or keep it in the background, but do not close this window.")
 	fmt.Println()
 	fmt.Println("To quit, press Ctrl-C, or click the [X] in the top right corner.")
 	fmt.Println()
@@ -362,13 +364,13 @@ func main() {
 
 	cycleSteps := []func(){
 		func() { raiseWindow(findWindowByPrefix("Report Viewer:")) },
-		func() { raiseWindow(findWindowByPrefix("Order Viewer:")) },
 		func() {
 			raiseWindow(findWindowByPrefix("Merge RealTime"))
 			for _, hwnd := range findAllWindowsByPrefix("Merge") {
 				raiseWindow(hwnd)
 			}
 		},
+		func() { raiseWindow(findWindowByPrefix("Order Viewer:")) },		
 	}
 
 	cycle := 0
