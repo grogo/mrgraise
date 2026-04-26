@@ -39,12 +39,15 @@ var (
 	procOpenClipboard       = user32.NewProc("OpenClipboard")
 	procEmptyClipboard      = user32.NewProc("EmptyClipboard")
 	procSetClipboardData    = user32.NewProc("SetClipboardData")
+	procGetClipboardData    = user32.NewProc("GetClipboardData")
 	procCloseClipboard      = user32.NewProc("CloseClipboard")
 	procMessageBoxW         = user32.NewProc("MessageBoxW")
 	procMessageBeep         = user32.NewProc("MessageBeep")
+	procKeybdEvent          = user32.NewProc("keybd_event")
 	procGlobalAlloc         = kernel32.NewProc("GlobalAlloc")
 	procGlobalLock          = kernel32.NewProc("GlobalLock")
 	procGlobalUnlock        = kernel32.NewProc("GlobalUnlock")
+	procGlobalSize          = kernel32.NewProc("GlobalSize")
 	procGlobalFree          = kernel32.NewProc("GlobalFree")
 )
 
@@ -62,11 +65,18 @@ const (
 
 	WH_KEYBOARD_LL = 13
 	WM_KEYDOWN     = 0x0100
+	WM_KEYUP       = 0x0101
 	WM_SYSKEYDOWN  = 0x0104
+	WM_SYSKEYUP    = 0x0105
 
-	VK_F5 = 0x74
-	VK_F6 = 0x75
-	VK_F7 = 0x76
+	VK_F5      = 0x74
+	VK_F6      = 0x75
+	VK_F8      = 0x77
+	VK_CONTROL = 0x11
+	VK_C       = 0x43
+	VK_V       = 0x56
+
+	KEYEVENTF_KEYUP = 0x0002
 
 	CF_UNICODETEXT = 13
 	GMEM_MOVEABLE  = 0x0002
@@ -245,6 +255,88 @@ func setClipboardText(text string) error {
 	return nil
 }
 
+// getClipboardText reads CF_UNICODETEXT from the clipboard. Returns ""
+// (no error) if there is no Unicode text on the clipboard.
+func getClipboardText() (string, error) {
+	if r, _, _ := procOpenClipboard.Call(0); r == 0 {
+		return "", fmt.Errorf("OpenClipboard failed")
+	}
+	defer procCloseClipboard.Call()
+
+	hMem, _, _ := procGetClipboardData.Call(CF_UNICODETEXT)
+	if hMem == 0 {
+		return "", nil
+	}
+	ptr, _, _ := procGlobalLock.Call(hMem)
+	if ptr == 0 {
+		return "", fmt.Errorf("GlobalLock failed")
+	}
+	defer procGlobalUnlock.Call(hMem)
+
+	size, _, _ := procGlobalSize.Call(hMem)
+	if size == 0 {
+		return "", nil
+	}
+	// Reinterpret ptr as *uint16; UTF16ToString stops at the first NUL,
+	// so the over-large slice (from rounded-up GlobalAlloc block size)
+	// is fine.
+	buf := unsafe.Slice(*(**uint16)(unsafe.Pointer(&ptr)), int(size)/2)
+	return syscall.UTF16ToString(buf), nil
+}
+
+// clearClipboard removes all formats from the clipboard.
+func clearClipboard() error {
+	if r, _, _ := procOpenClipboard.Call(0); r == 0 {
+		return fmt.Errorf("OpenClipboard failed")
+	}
+	defer procCloseClipboard.Call()
+	procEmptyClipboard.Call()
+	return nil
+}
+
+// sendCtrlKey synthesizes Ctrl+<vk> as a global keystroke into whatever
+// window currently has focus.
+func sendCtrlKey(vk uintptr) {
+	procKeybdEvent.Call(VK_CONTROL, 0, 0, 0)
+	procKeybdEvent.Call(vk, 0, 0, 0)
+	procKeybdEvent.Call(vk, 0, KEYEVENTF_KEYUP, 0)
+	procKeybdEvent.Call(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+}
+
+// renumberSelectionViaClipboard copies the focused window's current
+// selection (Ctrl+C), runs it through the renumber pipeline, and pastes
+// the result back (Ctrl+V). Does nothing if no text was selected or the
+// selection was whitespace-only. Clears the clipboard before Ctrl+C so
+// "no selection" can be detected reliably; the caller's existing
+// clipboard contents are NOT preserved in that case.
+func renumberSelectionViaClipboard() {
+	if err := clearClipboard(); err != nil {
+		showError("Clipboard error: " + err.Error())
+		return
+	}
+
+	sendCtrlKey(VK_C)
+	time.Sleep(100 * time.Millisecond)
+
+	result, err := getClipboardText()
+	if err != nil {
+		showError("Clipboard error: " + err.Error())
+		return
+	}
+	if strings.TrimSpace(result) == "" {
+		return
+	}
+
+	out := numberParagraphs(stripMarkdown(removeNumbering(result))) + "\n"
+	if err := setClipboardText(out); err != nil {
+		showError("Clipboard error: " + err.Error())
+		return
+	}
+
+	sendCtrlKey(VK_V)
+	procMessageBeep.Call(MB_OK)
+}
+
 // showError displays a Windows modal error dialog. Blocks until the
 // user dismisses it.
 func showError(msg string) {
@@ -318,14 +410,27 @@ func pinTop(hwnd uintptr) {
 var keyEvents = make(chan uint32, 8)
 
 func keyboardHookProc(nCode uintptr, wParam uintptr, lParam uintptr) uintptr {
-	if int32(nCode) == 0 && (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
+	if int32(nCode) == 0 {
 		// Reinterpret lParam (a uintptr holding a pointer) as *kbdllhookstruct.
 		// Going through &lParam avoids vet's unsafe.Pointer(uintptr) warning.
 		k := *(**kbdllhookstruct)(unsafe.Pointer(&lParam))
-		if k.vkCode == VK_F5 || k.vkCode == VK_F6 || k.vkCode == VK_F7 {
-			select {
-			case keyEvents <- k.vkCode:
-			default:
+		switch wParam {
+		case WM_KEYDOWN, WM_SYSKEYDOWN:
+			if k.vkCode == VK_F5 || k.vkCode == VK_F6 || k.vkCode == VK_F8 {
+				select {
+				case keyEvents <- k.vkCode:
+				default:
+				}
+				// F8 is bound to a clipboard action — swallow it so the
+				// focused app (which the synthesized Ctrl+C will target)
+				// does not also see F8 and clobber the selection.
+				if k.vkCode == VK_F8 {
+					return 1
+				}
+			}
+		case WM_KEYUP, WM_SYSKEYUP:
+			if k.vkCode == VK_F8 {
+				return 1
 			}
 		}
 	}
@@ -352,8 +457,9 @@ func keyboardHookProcF5(nCode uintptr, wParam uintptr, lParam uintptr) uintptr {
 var hookCallbackF5 = syscall.NewCallback(keyboardHookProcF5)
 
 // runKeyboardHook installs a low-level keyboard hook and pumps messages
-// so Windows can dispatch hook callbacks to this thread. The hook only
-// observes keys — it does not swallow them.
+// so Windows can dispatch hook callbacks to this thread. F5 and F6 are
+// observed only; F8 is swallowed so the focused app doesn't act on it
+// while we're synthesizing Ctrl+C/Ctrl+V against the same window.
 func runKeyboardHook() {
 	runtime.LockOSThread()
 	h, _, err := procSetWindowsHookExW.Call(WH_KEYBOARD_LL, hookCallback, 0, 0)
@@ -381,6 +487,8 @@ func main() {
 In order for this shortcut to work, enable 'Auto Open Order Viewer', 'Auto Open Report Viewer', and 'Auto Open ER Panel' in Preferences->Start-up.`)
 	fmt.Println()		
 	fmt.Println("Hotkey: F6 copies patient info (Name;DOB;Loc;MRN;Date;ACC;Exam) from Order Viewer to the clipboard.")
+	fmt.Println()
+	fmt.Println("Hotkey: F8 takes the currently selected text, strips any prior numbering and markdown, and pastes it back with paragraphs renumbered.")
 	fmt.Println()
 	fmt.Println("It's ok to minimize this window to the task bar, or keep it in the background, but do not close this window.")
 	fmt.Println()
@@ -464,6 +572,8 @@ In order for this shortcut to work, enable 'Auto Open Order Viewer', 'Auto Open 
 				lastF5 = time.Now()
 			case VK_F6:
 				copyOrderInfoToClipboard()
+			case VK_F8:
+				renumberSelectionViaClipboard()
 			}
 		}
 	}
