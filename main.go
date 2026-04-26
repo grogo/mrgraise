@@ -3,6 +3,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"regexp"
 	"runtime"
@@ -11,6 +12,16 @@ import (
 	"time"
 	"unsafe"
 )
+
+// debug is set by -d/--debug and gates the diagnostic prints in the F5
+// cycle handler. Off by default.
+var debug bool
+
+func debugf(format string, args ...any) {
+	if debug {
+		fmt.Printf(format, args...)
+	}
+}
 
 var (
 	user32                  = syscall.NewLazyDLL("user32.dll")
@@ -132,6 +143,21 @@ func getWindowText(hwnd uintptr) string {
 	var buf [512]uint16
 	n, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
 	return syscall.UTF16ToString(buf[:n])
+}
+
+// dumpAllTitles prints every non-empty top-level window title. Used
+// to diagnose why a prefix search didn't match. Caller must check the
+// debug flag.
+func dumpAllTitles() {
+	all := findAllWindowsByPrefix("")
+	fmt.Printf("    -- %d top-level windows --\n", len(all))
+	for _, hwnd := range all {
+		t := getWindowText(hwnd)
+		if t == "" {
+			continue
+		}
+		fmt.Printf("      %#x %q\n", hwnd, t)
+	}
 }
 
 // ACC field format: NN-TT-NN-NNNNNN (digits-letters-digits-digits).
@@ -345,6 +371,10 @@ func runKeyboardHook() {
 }
 
 func main() {
+	flag.BoolVar(&debug, "debug", false, "enable verbose debug output for the F5 cycle handler")
+	flag.BoolVar(&debug, "d", false, "shorthand for --debug")
+	flag.Parse()
+
 	fmt.Printf("Pinning to top: %s\n", WIN_TITLE)
 	fmt.Println()
 	fmt.Println(`Hotkey: F5 cycles through Report Viewer, Order Viewer, and Patient Record/Worklist. 
@@ -362,18 +392,53 @@ In order for this shortcut to work, enable 'Auto Open Order Viewer', 'Auto Open 
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
-	cycleSteps := []func(){
-		func() { raiseWindow(findWindowByPrefix("Report Viewer:")) },
-		func() {
+	// Each step returns true if it found and raised a window. A step that
+	// returns false is skipped so F5 advances to the next available
+	// window instead of being a no-op.
+	cycleSteps := []func() bool{
+		func() bool {
+			hwnd := findWindowByPrefix("Report Viewer:")
+			if hwnd == 0 {
+				debugf("    [Report Viewer:] not found\n")
+				return false
+			}
+			debugf("    [Report Viewer:] hwnd=%#x title=%q\n", hwnd, getWindowText(hwnd))
+			raiseWindow(hwnd)
+			return true
+		},
+		func() bool {
+			merges := findAllWindowsByPrefix("Merge")
+			if len(merges) == 0 {
+				debugf("    [Merge] not found\n")
+				return false
+			}
+			debugf("    [Merge] %d match(es)\n", len(merges))
+			if debug {
+				for _, h := range merges {
+					debugf("      %#x %q\n", h, getWindowText(h))
+				}
+			}
 			raiseWindow(findWindowByPrefix("Merge RealTime"))
-			for _, hwnd := range findAllWindowsByPrefix("Merge") {
+			for _, hwnd := range merges {
 				raiseWindow(hwnd)
 			}
+			return true
 		},
-		func() { raiseWindow(findWindowByPrefix("Order Viewer:")) },		
+		func() bool {
+			hwnd := findWindowByPrefix("Order Viewer:")
+			if hwnd == 0 {
+				debugf("    [Order Viewer:] not found\n")
+				return false
+			}
+			debugf("    [Order Viewer:] hwnd=%#x title=%q\n", hwnd, getWindowText(hwnd))
+			raiseWindow(hwnd)
+			return true
+		},
 	}
 
+	const cycleIdleReset = 10 * time.Second
 	cycle := 0
+	var lastF5 time.Time
 	for {
 		select {
 		case <-ticker.C:
@@ -381,8 +446,22 @@ In order for this shortcut to work, enable 'Auto Open Order Viewer', 'Auto Open 
 		case vk := <-keyEvents:
 			switch vk {
 			case VK_F5:
-				cycleSteps[cycle]()
-				cycle = (cycle + 1) % len(cycleSteps)
+				debugf("F5: cycle=%d, idle=%v\n", cycle, time.Since(lastF5))
+				if debug {
+					dumpAllTitles()
+				}
+				if time.Since(lastF5) >= cycleIdleReset {
+					cycle = 0
+				}
+				for tried := 0; tried < len(cycleSteps); tried++ {
+					idx := (cycle + tried) % len(cycleSteps)
+					debugf("  step %d:\n", idx)
+					if cycleSteps[idx]() {
+						cycle = (idx + 1) % len(cycleSteps)
+						break
+					}
+				}
+				lastF5 = time.Now()
 			case VK_F6:
 				copyOrderInfoToClipboard()
 			}
