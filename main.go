@@ -345,38 +345,38 @@ func renumberSelectionViaClipboard() {
 // pinned).
 func showError(msg string) {
 	fmt.Println("Error:", msg)
-	done := make(chan struct{})
-	go func() {
-		t := time.NewTicker(300 * time.Millisecond)
-		defer t.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-t.C:
-				hwnd := findWindowExact("mrgraise")
-				if hwnd == 0 {
-					continue
-				}
-				procSetWindowPos.Call(
-					hwnd,
-					HWND_TOPMOST,
-					0, 0, 0, 0,
-					SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE,
-				)
-			}
-		}
-	}()
-	defer close(done)
+	// done := make(chan struct{})
+	// go func() {
+	// 	t := time.NewTicker(300 * time.Millisecond)
+	// 	defer t.Stop()
+	// 	for {
+	// 		select {
+	// 		case <-done:
+	// 			return
+	// 		case <-t.C:
+	// 			hwnd := findWindowExact("mrgraise")
+	// 			if hwnd == 0 {
+	// 				continue
+	// 			}
+	// 			procSetWindowPos.Call(
+	// 				hwnd,
+	// 				HWND_TOPMOST,
+	// 				0, 0, 0, 0,
+	// 				SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE,
+	// 			)
+	// 		}
+	// 	}
+	// }()
+	// defer close(done)
 
-	title, _ := syscall.UTF16PtrFromString("mrgraise")
-	body, _ := syscall.UTF16PtrFromString(msg)
-	procMessageBoxW.Call(
-		0,
-		uintptr(unsafe.Pointer(body)),
-		uintptr(unsafe.Pointer(title)),
-		MB_OK|MB_ICONERROR|MB_TOPMOST|MB_SETFOREGROUND,
-	)
+	// title, _ := syscall.UTF16PtrFromString("mrgraise")
+	// body, _ := syscall.UTF16PtrFromString(msg)
+	// procMessageBoxW.Call(
+	// 	0,
+	// 	uintptr(unsafe.Pointer(body)),
+	// 	uintptr(unsafe.Pointer(title)),
+	// 	MB_OK|MB_ICONERROR|MB_TOPMOST|MB_SETFOREGROUND,
+	// )
 }
 
 // copyOrderInfoToClipboard locates the Order Viewer window, pulls the
