@@ -344,6 +344,7 @@ func renumberSelectionViaClipboard() {
 // topmost window (e.g., ER WorkFlow Panel, which the ticker keeps
 // pinned).
 func showError(msg string) {
+	fmt.Println("Error:", msg)
 	done := make(chan struct{})
 	go func() {
 		t := time.NewTicker(300 * time.Millisecond)
