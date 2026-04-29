@@ -81,9 +81,10 @@ const (
 	CF_UNICODETEXT = 13
 	GMEM_MOVEABLE  = 0x0002
 
-	MB_OK        = 0x00000000
-	MB_ICONERROR = 0x00000010
-	MB_TOPMOST   = 0x00040000
+	MB_OK            = 0x00000000
+	MB_ICONERROR     = 0x00000010
+	MB_SETFOREGROUND = 0x00010000
+	MB_TOPMOST       = 0x00040000
 )
 
 type kbdllhookstruct struct {
@@ -338,15 +339,42 @@ func renumberSelectionViaClipboard() {
 }
 
 // showError displays a Windows modal error dialog. Blocks until the
-// user dismisses it.
+// user dismisses it. A watchdog goroutine re-asserts the dialog as
+// HWND_TOPMOST every 300ms so it can't be hidden behind another
+// topmost window (e.g., ER WorkFlow Panel, which the ticker keeps
+// pinned).
 func showError(msg string) {
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(300 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				hwnd := findWindowExact("mrgraise")
+				if hwnd == 0 {
+					continue
+				}
+				procSetWindowPos.Call(
+					hwnd,
+					HWND_TOPMOST,
+					0, 0, 0, 0,
+					SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE,
+				)
+			}
+		}
+	}()
+	defer close(done)
+
 	title, _ := syscall.UTF16PtrFromString("mrgraise")
 	body, _ := syscall.UTF16PtrFromString(msg)
 	procMessageBoxW.Call(
 		0,
 		uintptr(unsafe.Pointer(body)),
 		uintptr(unsafe.Pointer(title)),
-		MB_OK|MB_ICONERROR|MB_TOPMOST,
+		MB_OK|MB_ICONERROR|MB_TOPMOST|MB_SETFOREGROUND,
 	)
 }
 
@@ -485,7 +513,7 @@ func main() {
 	fmt.Println()
 	fmt.Println(`Hotkey: F5 cycles through Report Viewer, Order Viewer, and Patient Record/Worklist. 
 In order for this shortcut to work, enable 'Auto Open Order Viewer', 'Auto Open Report Viewer', and 'Auto Open ER Panel' in Preferences->Start-up.`)
-	fmt.Println()		
+	fmt.Println()
 	fmt.Println("Hotkey: F6 copies patient info (Name;DOB;Loc;MRN;Date;ACC;Exam) from Order Viewer to the clipboard.")
 	fmt.Println()
 	fmt.Println("Hotkey: F8 takes the currently selected text, strips any prior numbering and markdown, and pastes it back with paragraphs renumbered.")
