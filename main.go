@@ -347,38 +347,44 @@ func showError(msg string) {
 	fmt.Println("Error:", msg)
 	procMessageBeep.Call(MB_OK)
 
-	done := make(chan struct{})
+	// Run the dialog and its watchdog on a separate goroutine so the
+	// caller (typically the main select loop) is not blocked until the
+	// user dismisses the dialog. Multiple errors in quick succession
+	// will stack multiple dialogs; that's acceptable.
 	go func() {
-		t := time.NewTicker(300 * time.Millisecond)
-		defer t.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-t.C:
-				hwnd := findWindowExact("mrgraise")
-				if hwnd == 0 {
-					continue
+		done := make(chan struct{})
+		go func() {
+			t := time.NewTicker(300 * time.Millisecond)
+			defer t.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-t.C:
+					hwnd := findWindowExact("mrgraise")
+					if hwnd == 0 {
+						continue
+					}
+					procSetWindowPos.Call(
+						hwnd,
+						HWND_TOPMOST,
+						0, 0, 0, 0,
+						SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE,
+					)
 				}
-				procSetWindowPos.Call(
-					hwnd,
-					HWND_TOPMOST,
-					0, 0, 0, 0,
-					SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE,
-				)
 			}
-		}
-	}()
-	defer close(done)
+		}()
+		defer close(done)
 
-	title, _ := syscall.UTF16PtrFromString("mrgraise")
-	body, _ := syscall.UTF16PtrFromString(msg)
-	procMessageBoxW.Call(
-		0,
-		uintptr(unsafe.Pointer(body)),
-		uintptr(unsafe.Pointer(title)),
-		MB_OK|MB_ICONERROR|MB_TOPMOST|MB_SETFOREGROUND,
-	)
+		title, _ := syscall.UTF16PtrFromString("mrgraise")
+		body, _ := syscall.UTF16PtrFromString(msg)
+		procMessageBoxW.Call(
+			0,
+			uintptr(unsafe.Pointer(body)),
+			uintptr(unsafe.Pointer(title)),
+			MB_OK|MB_ICONERROR|MB_TOPMOST|MB_SETFOREGROUND,
+		)
+	}()
 }
 
 // copyOrderInfoToClipboard locates the Order Viewer window, pulls the
