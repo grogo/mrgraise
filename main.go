@@ -552,20 +552,24 @@ In order for this shortcut to work, enable 'Auto Open Order Viewer', 'Auto Open 
 			return true
 		},
 		func() bool {
-			merges := findAllWindowsByPrefix("Merge")
-			if len(merges) == 0 {
-				debugf("    [Merge] not found\n")
-				return false
-			}
+			merges := findAllWindowsByPrefix("Merge:  Radiologist") // yes, two spaces!
 			debugf("    [Merge] %d match(es)\n", len(merges))
 			if debug {
 				for _, h := range merges {
 					debugf("      %#x %q\n", h, getWindowText(h))
 				}
 			}
-			raiseWindow(findWindowByPrefix("Merge RealTime"))
 			for _, hwnd := range merges {
 				raiseWindow(hwnd)
+			}
+
+			// raise the main worklist window LAST
+			// so it's on top of the others.
+			raiseWindow(findWindowByPrefix("Merge RealTime"))
+
+			if len(merges) == 0 {
+				debugf("    [Merge] not found\n")
+				return false
 			}
 			return true
 		},
