@@ -335,7 +335,7 @@ func renumberSelectionViaClipboard() {
 	}
 
 	sendCtrlKey(VK_V)
-	procMessageBeep.Call(MB_OK)
+	// procMessageBeep.Call(MB_OK)
 }
 
 // showError displays a Windows modal error dialog. Blocks until the
@@ -345,38 +345,40 @@ func renumberSelectionViaClipboard() {
 // pinned).
 func showError(msg string) {
 	fmt.Println("Error:", msg)
-	// done := make(chan struct{})
-	// go func() {
-	// 	t := time.NewTicker(300 * time.Millisecond)
-	// 	defer t.Stop()
-	// 	for {
-	// 		select {
-	// 		case <-done:
-	// 			return
-	// 		case <-t.C:
-	// 			hwnd := findWindowExact("mrgraise")
-	// 			if hwnd == 0 {
-	// 				continue
-	// 			}
-	// 			procSetWindowPos.Call(
-	// 				hwnd,
-	// 				HWND_TOPMOST,
-	// 				0, 0, 0, 0,
-	// 				SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE,
-	// 			)
-	// 		}
-	// 	}
-	// }()
-	// defer close(done)
+	procMessageBeep.Call(MB_OK)
 
-	// title, _ := syscall.UTF16PtrFromString("mrgraise")
-	// body, _ := syscall.UTF16PtrFromString(msg)
-	// procMessageBoxW.Call(
-	// 	0,
-	// 	uintptr(unsafe.Pointer(body)),
-	// 	uintptr(unsafe.Pointer(title)),
-	// 	MB_OK|MB_ICONERROR|MB_TOPMOST|MB_SETFOREGROUND,
-	// )
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(300 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				hwnd := findWindowExact("mrgraise")
+				if hwnd == 0 {
+					continue
+				}
+				procSetWindowPos.Call(
+					hwnd,
+					HWND_TOPMOST,
+					0, 0, 0, 0,
+					SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE,
+				)
+			}
+		}
+	}()
+	defer close(done)
+
+	title, _ := syscall.UTF16PtrFromString("mrgraise")
+	body, _ := syscall.UTF16PtrFromString(msg)
+	procMessageBoxW.Call(
+		0,
+		uintptr(unsafe.Pointer(body)),
+		uintptr(unsafe.Pointer(title)),
+		MB_OK|MB_ICONERROR|MB_TOPMOST|MB_SETFOREGROUND,
+	)
 }
 
 // copyOrderInfoToClipboard locates the Order Viewer window, pulls the
@@ -387,7 +389,7 @@ func showError(msg string) {
 func copyOrderInfoToClipboard() {
 	hwnd := findWindowByPrefix("Order Viewer:")
 	if hwnd == 0 {
-		showError("Warning: F6 copy failed because Order Viewer window not found. Please open the Order Viewer window in Merge first.")
+		showError("Warning: F6 copy failed because Order Viewer window was not found. Please open the Order Viewer window in Merge first.")
 		return
 	}
 	name, dob, loc, mrn, date, acc, exam := parseOrderViewerTitle(getWindowText(hwnd))
@@ -396,7 +398,7 @@ func copyOrderInfoToClipboard() {
 		showError("Clipboard error: " + err.Error())
 		return
 	}
-	procMessageBeep.Call(MB_OK)
+	// procMessageBeep.Call(MB_OK)
 }
 
 func restoreIfMinimized(hwnd uintptr) {
@@ -517,9 +519,9 @@ In order for this shortcut to work, enable 'Auto Open Order Viewer', 'Auto Open 
 	fmt.Println()
 	fmt.Println("Hotkey: F6 copies patient info (Name;DOB;Loc;MRN;Date;ACC;Exam) from Order Viewer to the clipboard.")
 	fmt.Println()
-	fmt.Println("Hotkey: F8 takes the currently selected text, strips any prior numbering and markdown, and pastes it back with paragraphs renumbered.")
+	fmt.Println("Hotkey: F8 takes the currently selected text, strips any prior numbering, and pastes it back with paragraphs renumbered and properly formatted.")
 	fmt.Println()
-	fmt.Println("It's ok to minimize this window to the task bar, or keep it in the background, but do not close this window.")
+	fmt.Println("It's ok to minimize this window to the task bar, or keep it in the background, but do not close it.")
 	fmt.Println()
 	fmt.Println("To quit, press Ctrl-C, or click the [X] in the top right corner.")
 	fmt.Println()
