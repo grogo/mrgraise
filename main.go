@@ -569,7 +569,7 @@ In order for this shortcut to work, enable 'Auto Open Order Viewer', 'Auto Open 
 
 			if len(merges) == 0 {
 				debugf("    [Merge] not found\n")
-				return false
+				// return false
 			}
 			return true
 		},
