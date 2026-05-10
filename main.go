@@ -399,7 +399,7 @@ func copyOrderInfoToClipboard() {
 		return
 	}
 	name, dob, loc, mrn, date, acc, exam := parseOrderViewerTitle(getWindowText(hwnd))
-	record := strings.Join([]string{name, dob, loc, mrn, date, acc, exam}, ";")
+	record := strings.Join([]string{name, dob, loc, mrn, date, acc, exam}, "\t")
 	if err := setClipboardText(record); err != nil {
 		showError("Clipboard error: " + err.Error())
 		return
