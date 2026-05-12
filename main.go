@@ -358,8 +358,9 @@ func renumberSelectionViaClipboard() {
 }
 
 // runLLMOnSelectionAsync captures the focused window's current selection
-// and dispatches the LLM call on a goroutine so the topmost-pin ticker
-// in the main loop isn't blocked while the API call is in flight.
+// and hands it off to showLLMUI, which runs the API call on its own
+// LockOSThread'd goroutine while displaying Asking/Result windows. The
+// topmost-pin ticker in the main loop is never blocked.
 func runLLMOnSelectionAsync(generateImpression bool) {
 	// User triggered this with Ctrl+Alt+S/C; release those modifiers so
 	// the synthesized Ctrl+C below isn't seen as Ctrl+Alt+C.
@@ -374,14 +375,7 @@ func runLLMOnSelectionAsync(generateImpression bool) {
 		return
 	}
 
-	go func() {
-		cfg, err := getLLMConfig()
-		if err != nil {
-			showError("LLM config error: " + err.Error())
-			return
-		}
-		processReportText(cfg, text, generateImpression)
-	}()
+	showLLMUI(text, generateImpression)
 }
 
 // showError displays a Windows modal error dialog. Blocks until the
@@ -400,23 +394,26 @@ func showError(msg string) {
 	go func() {
 		done := make(chan struct{})
 		go func() {
-			t := time.NewTicker(300 * time.Millisecond)
-			defer t.Stop()
+			// Re-pin immediately on each iteration (no leading delay),
+			// matching the keepTopmost pattern in ui.go: SetWindowPos
+			// on a hidden window doesn't reliably reorder the Z-order,
+			// so we need to fire as soon as the MessageBox HWND exists.
+			// SWP_SHOWWINDOW is what actually moves a hidden topmost
+			// window to the front of the topmost group.
 			for {
-				select {
-				case <-done:
-					return
-				case <-t.C:
-					hwnd := findWindowExact("mrgraise")
-					if hwnd == 0 {
-						continue
-					}
+				hwnd := findWindowExact("mrgraise")
+				if hwnd != 0 {
 					procSetWindowPos.Call(
 						hwnd,
 						HWND_TOPMOST,
 						0, 0, 0, 0,
-						SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE,
+						SWP_NOSIZE|SWP_NOMOVE|SWP_NOACTIVATE|SWP_SHOWWINDOW,
 					)
+				}
+				select {
+				case <-done:
+					return
+				case <-time.After(150 * time.Millisecond):
 				}
 			}
 		}()

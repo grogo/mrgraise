@@ -26,3 +26,4 @@ go.work.sum
 *.zip
 *.png
 secrets.ini
+window_state.txt

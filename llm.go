@@ -211,35 +211,32 @@ func queryClaude(cfg Config, userPrompt string, userInput string) (string, error
 	return strings.TrimSpace(apiResp.Content[0].Text), nil
 }
 
-// processReportText sends userInput to Claude with either the
-// generate-impression or check-report prompt and prints the response.
-// In impression mode the cleaned impression text is also placed on the
-// clipboard so the user can paste it back into the report with Ctrl+V.
-func processReportText(cfg Config, userInput string, generateImpression bool) {
+// runLLMQuery sends userInput to Claude with either the generate-impression
+// or check-report prompt and returns the response text formatted for
+// display. In impression mode the cleaned impression text is also placed
+// on the clipboard so the user can paste it back into the report with
+// Ctrl+V; a note about the clipboard outcome is appended to the returned
+// display text.
+func runLLMQuery(cfg Config, userInput string, generateImpression bool) (string, error) {
 	filtered := filterParagraphs(userInput, phrasesToFilter)
 
 	if generateImpression {
 		result, err := queryClaude(cfg, cfg.GenImpressionQuery, filtered)
 		if err != nil {
-			showError(fmt.Sprintf("LLM error: %v", err))
-			return
+			return "", err
 		}
 		errs := extractErrorsBeforeImpression(result)
 		paragraphs := numberParagraphs(stripMarkdown(removeNumbering(result)))
-		fmt.Printf("=============================\n")
-
-		fmt.Printf("ERRORS:\n %s\n\nIMPRESSION:\n%s\n\n", errs, paragraphs)
+		clipboardNote := "(Impression has been placed in the clipboard. Press Ctrl-V to insert into report.)"
 		if err := setClipboardText(paragraphs); err != nil {
-			showError("Clipboard error: " + err.Error())
+			clipboardNote = fmt.Sprintf("(Clipboard error: %v)", err)
 		}
-		return
+		return fmt.Sprintf("ERRORS:\n%s\n\nIMPRESSION:\n%s\n\n%s", errs, paragraphs, clipboardNote), nil
 	}
 
 	result, err := queryClaude(cfg, cfg.CheckReportQuery, filtered)
 	if err != nil {
-		showError(fmt.Sprintf("LLM error: %v", err))
-		return
+		return "", err
 	}
-	fmt.Printf("=============================\n")
-	fmt.Printf("%s\n\n", stripMarkdown(result))
+	return stripMarkdown(result), nil
 }
