@@ -193,6 +193,34 @@ var accRe = regexp.MustCompile(`^\d{2}-[A-Za-z]{2}-\d{2}-\d{6}$`)
 // Service-date field format: MM/DD/YYYY (1- or 2-digit month/day).
 var dateRe = regexp.MustCompile(`^\d{1,2}/\d{1,2}/\d{4}$`)
 
+// accLocPrefixes maps the first two digits of an accession number to
+// the canonical site/location code. Multiple prefixes can map to the
+// same site (e.g., 23 and 24 both → REDD).
+var accLocPrefixes = map[string]string{
+	"23": "REDD",
+	"24": "REDD",
+	"75": "DHAI",
+	"15": "MET",
+	"16": "WHC",
+	"18": "MSJ",
+	"14": "MGH",
+	"17": "MHF",
+	"25": "SNM",
+}
+
+// locFromAcc returns the location code derived from the first two
+// characters of acc. Falls back to fallback when acc is shorter than
+// two characters or its prefix is not in the mapping table.
+func locFromAcc(acc, fallback string) string {
+	if len(acc) < 2 {
+		return fallback
+	}
+	if v, ok := accLocPrefixes[acc[:2]]; ok {
+		return v
+	}
+	return fallback
+}
+
 // parseOrderViewerTitle pulls the patient fields out of an Order Viewer
 // title bar. Name/DOB/Loc/MRN are positional (fields 0..3 of the
 // pipe-separated layout). ACC and service date are located by pattern
@@ -226,6 +254,7 @@ func parseOrderViewerTitle(title string) (name, dob, loc, mrn, date, acc, exam s
 			date = p
 		}
 	}
+	loc = locFromAcc(acc, loc)
 	// Exam needs room for Name/DOB/Loc/MRN plus at least exam + trailing
 	// modality, so require ≥6 fields before treating next-to-last as exam.
 	if len(parts) >= 6 {
