@@ -44,6 +44,7 @@ var (
 	procMessageBoxW         = user32.NewProc("MessageBoxW")
 	procMessageBeep         = user32.NewProc("MessageBeep")
 	procKeybdEvent          = user32.NewProc("keybd_event")
+	procGetAsyncKeyState    = user32.NewProc("GetAsyncKeyState")
 	procGlobalAlloc         = kernel32.NewProc("GlobalAlloc")
 	procGlobalLock          = kernel32.NewProc("GlobalLock")
 	procGlobalUnlock        = kernel32.NewProc("GlobalUnlock")
@@ -69,11 +70,17 @@ const (
 	WM_SYSKEYDOWN  = 0x0104
 	WM_SYSKEYUP    = 0x0105
 
+	// kbdllhookstruct.flags bit set on events synthesized by SendInput /
+	// keybd_event. Used to ignore our own injected keystrokes.
+	LLKHF_INJECTED = 0x10
+
 	VK_F5      = 0x74
 	VK_F6      = 0x75
 	VK_F8      = 0x77
 	VK_CONTROL = 0x11
+	VK_MENU    = 0x12 // Alt
 	VK_C       = 0x43
+	VK_S       = 0x53
 	VK_V       = 0x56
 
 	KEYEVENTF_KEYUP = 0x0002
@@ -304,22 +311,35 @@ func sendCtrlKey(vk uintptr) {
 	procKeybdEvent.Call(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
 }
 
+// captureSelectionViaClipboard clears the clipboard, synthesizes Ctrl+C
+// against the focused window, and returns whatever Unicode text landed
+// on the clipboard. Empty string with nil error means nothing was
+// selected. The caller's pre-existing clipboard contents are NOT
+// preserved.
+func captureSelectionViaClipboard() (string, error) {
+	if err := clearClipboard(); err != nil {
+		return "", err
+	}
+	sendCtrlKey(VK_C)
+	time.Sleep(100 * time.Millisecond)
+	return getClipboardText()
+}
+
+// releaseHotkeyModifiers injects key-up events for Alt and Ctrl so that
+// the next synthesized Ctrl+C/V isn't confused by the modifiers still
+// being physically held from a triggering Ctrl+Alt+X hotkey.
+func releaseHotkeyModifiers() {
+	procKeybdEvent.Call(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+	procKeybdEvent.Call(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+	time.Sleep(50 * time.Millisecond)
+}
+
 // renumberSelectionViaClipboard copies the focused window's current
 // selection (Ctrl+C), runs it through the renumber pipeline, and pastes
 // the result back (Ctrl+V). Does nothing if no text was selected or the
-// selection was whitespace-only. Clears the clipboard before Ctrl+C so
-// "no selection" can be detected reliably; the caller's existing
-// clipboard contents are NOT preserved in that case.
+// selection was whitespace-only.
 func renumberSelectionViaClipboard() {
-	if err := clearClipboard(); err != nil {
-		showError("Clipboard error: " + err.Error())
-		return
-	}
-
-	sendCtrlKey(VK_C)
-	time.Sleep(100 * time.Millisecond)
-
-	result, err := getClipboardText()
+	result, err := captureSelectionViaClipboard()
 	if err != nil {
 		showError("Clipboard error: " + err.Error())
 		return
@@ -335,7 +355,33 @@ func renumberSelectionViaClipboard() {
 	}
 
 	sendCtrlKey(VK_V)
-	// procMessageBeep.Call(MB_OK)
+}
+
+// runLLMOnSelectionAsync captures the focused window's current selection
+// and dispatches the LLM call on a goroutine so the topmost-pin ticker
+// in the main loop isn't blocked while the API call is in flight.
+func runLLMOnSelectionAsync(generateImpression bool) {
+	// User triggered this with Ctrl+Alt+S/C; release those modifiers so
+	// the synthesized Ctrl+C below isn't seen as Ctrl+Alt+C.
+	releaseHotkeyModifiers()
+
+	text, err := captureSelectionViaClipboard()
+	if err != nil {
+		showError("Clipboard error: " + err.Error())
+		return
+	}
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+
+	go func() {
+		cfg, err := getLLMConfig()
+		if err != nil {
+			showError("LLM config error: " + err.Error())
+			return
+		}
+		processReportText(cfg, text, generateImpression)
+	}()
 }
 
 // showError displays a Windows modal error dialog. Blocks until the
@@ -451,28 +497,51 @@ func keyboardHookProc(nCode uintptr, wParam uintptr, lParam uintptr) uintptr {
 		// Reinterpret lParam (a uintptr holding a pointer) as *kbdllhookstruct.
 		// Going through &lParam avoids vet's unsafe.Pointer(uintptr) warning.
 		k := *(**kbdllhookstruct)(unsafe.Pointer(&lParam))
-		switch wParam {
-		case WM_KEYDOWN, WM_SYSKEYDOWN:
-			if k.vkCode == VK_F5 || k.vkCode == VK_F6 || k.vkCode == VK_F8 {
-				select {
-				case keyEvents <- k.vkCode:
-				default:
+		// Ignore events we synthesized ourselves (sendCtrlKey, etc.) so
+		// our own Ctrl+C/Ctrl+V injections can't trigger the Ctrl+Alt+C
+		// hotkey on the way out.
+		if k.flags&LLKHF_INJECTED == 0 {
+			switch wParam {
+			case WM_KEYDOWN, WM_SYSKEYDOWN:
+				switch k.vkCode {
+				case VK_F5, VK_F6, VK_F8:
+					select {
+					case keyEvents <- k.vkCode:
+					default:
+					}
+					// F8 is bound to a clipboard action — swallow it so the
+					// focused app (which the synthesized Ctrl+C will target)
+					// does not also see F8 and clobber the selection.
+					if k.vkCode == VK_F8 {
+						return 1
+					}
+				case VK_S, VK_C:
+					// Ctrl+Alt+S / Ctrl+Alt+C are LLM hotkeys. Plain S / C
+					// (and Ctrl+C / Ctrl+S) pass through normally.
+					if isKeyDown(VK_CONTROL) && isKeyDown(VK_MENU) {
+						select {
+						case keyEvents <- k.vkCode:
+						default:
+						}
+						return 1
+					}
 				}
-				// F8 is bound to a clipboard action — swallow it so the
-				// focused app (which the synthesized Ctrl+C will target)
-				// does not also see F8 and clobber the selection.
+			case WM_KEYUP, WM_SYSKEYUP:
 				if k.vkCode == VK_F8 {
 					return 1
 				}
-			}
-		case WM_KEYUP, WM_SYSKEYUP:
-			if k.vkCode == VK_F8 {
-				return 1
 			}
 		}
 	}
 	ret, _, _ := procCallNextHookEx.Call(0, nCode, wParam, lParam)
 	return ret
+}
+
+// isKeyDown reports whether the high bit of GetAsyncKeyState is set,
+// i.e., whether the key is currently physically (or virtually) held.
+func isKeyDown(vk uintptr) bool {
+	r, _, _ := procGetAsyncKeyState.Call(vk)
+	return r&0x8000 != 0
 }
 
 var hookCallback = syscall.NewCallback(keyboardHookProc)
@@ -526,6 +595,10 @@ In order for this shortcut to work, enable 'Auto Open Order Viewer', 'Auto Open 
 	fmt.Println("Hotkey: F6 copies patient info (Name;DOB;Loc;MRN;Date;ACC;Exam) from Order Viewer to the clipboard.")
 	fmt.Println()
 	fmt.Println("Hotkey: F8 takes the currently selected text, strips any prior numbering, and pastes it back with paragraphs renumbered and properly formatted.")
+	fmt.Println()
+	fmt.Println("Hotkey: Ctrl+Alt+S sends the currently selected report text to Claude to generate an impression and places it on the clipboard (Ctrl+V to paste).")
+	fmt.Println()
+	fmt.Println("Hotkey: Ctrl+Alt+C sends the currently selected report text to Claude to check for errors and prints the result here.")
 	fmt.Println()
 	fmt.Println("It's ok to minimize this window to the task bar, or keep it in the background, but do not close it.")
 	fmt.Println()
@@ -615,6 +688,10 @@ In order for this shortcut to work, enable 'Auto Open Order Viewer', 'Auto Open 
 				copyOrderInfoToClipboard()
 			case VK_F8:
 				renumberSelectionViaClipboard()
+			case VK_S:
+				runLLMOnSelectionAsync(true)
+			case VK_C:
+				runLLMOnSelectionAsync(false)
 			}
 		}
 	}
