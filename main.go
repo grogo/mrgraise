@@ -50,7 +50,14 @@ var (
 	procGlobalUnlock        = kernel32.NewProc("GlobalUnlock")
 	procGlobalSize          = kernel32.NewProc("GlobalSize")
 	procGlobalFree          = kernel32.NewProc("GlobalFree")
+	procCreateMutexW        = kernel32.NewProc("CreateMutexW")
 )
+
+// CreateMutex sets this as the last error when the named mutex already
+// exists (i.e., another instance of mrgraise owns it). The handle is
+// still returned successfully in that case, so this is the value we
+// actually have to check.
+const ERROR_ALREADY_EXISTS syscall.Errno = 183
 
 const (
 	WIN_TITLE  = "ER WorkFlow Panel"
@@ -579,7 +586,42 @@ func runKeyboardHook() {
 	}
 }
 
+// ensureSingleInstance opens a named mutex. If another mrgraise process
+// owns it, returns false. The mutex handle leaks intentionally — it's
+// released when the process exits, which is exactly when we want to
+// release it.
+func ensureSingleInstance() bool {
+	name, _ := syscall.UTF16PtrFromString("Local\\mrgraise-singleinstance")
+	handle, _, err := procCreateMutexW.Call(
+		0, // lpMutexAttributes — default security
+		0, // bInitialOwner — don't acquire ownership
+		uintptr(unsafe.Pointer(name)),
+	)
+	if handle == 0 {
+		// CreateMutex itself failed — don't block startup over it.
+		return true
+	}
+	if errno, ok := err.(syscall.Errno); ok && errno == ERROR_ALREADY_EXISTS {
+		return false
+	}
+	return true
+}
+
 func main() {
+	if !ensureSingleInstance() {
+		// Blocking MessageBox so the user sees the reason even when the
+		// program is launched by double-click and the console flashes shut.
+		title, _ := syscall.UTF16PtrFromString("mrgraise")
+		body, _ := syscall.UTF16PtrFromString("mrgraise is already running. Please close the existing instance first.")
+		procMessageBoxW.Call(
+			0,
+			uintptr(unsafe.Pointer(body)),
+			uintptr(unsafe.Pointer(title)),
+			MB_OK|MB_ICONERROR|MB_TOPMOST|MB_SETFOREGROUND,
+		)
+		return
+	}
+
 	flag.BoolVar(&debug, "debug", false, "enable verbose debug output for the F5 cycle handler")
 	flag.BoolVar(&debug, "d", false, "shorthand for --debug")
 	flag.Parse()
