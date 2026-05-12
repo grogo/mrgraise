@@ -1,6 +1,8 @@
 package main
 
 import (
+	_ "embed"
+
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -13,6 +15,26 @@ import (
 
 	"gopkg.in/ini.v1"
 )
+
+// defaults.ini, prompts.ini, and secrets.ini are embedded into the
+// binary so a single-file deploy of mrgraise.exe works without these
+// files present. A file of the same name in the exe directory at
+// runtime takes precedence — drop one next to the exe to override
+// per-machine.
+//
+// SECURITY NOTE: the embedded secrets.ini bakes the API key into the
+// binary in plaintext. Anyone who can run `strings` on the .exe (or
+// distribute it) can extract the key. This is an explicit trade-off
+// for single-file deployment; treat the .exe itself as sensitive.
+//
+//go:embed defaults.ini
+var embeddedDefaultsIni []byte
+
+//go:embed prompts.ini
+var embeddedPromptsIni []byte
+
+//go:embed secrets.ini
+var embeddedSecretsIni []byte
 
 var phrasesToFilter = []string{
 	"EXAM:", "EXAM DATE:", "TECHNIQUE:", "COMPARISON:", "IV Contrast:",
@@ -68,19 +90,32 @@ type APIError struct {
 	} `json:"error"`
 }
 
-func loadConfig() Config {
-	exeDir := getExeDir()
+// loadIniDiskOrEmbedded reads filename from the exe directory if it
+// exists, otherwise falls back to the supplied embedded bytes. Returns
+// an error only if neither source is loadable (i.e., disk file is
+// missing AND there's no embedded fallback).
+func loadIniDiskOrEmbedded(filename string, embedded []byte) (*ini.File, error) {
+	diskPath := filepath.Join(getExeDir(), filename)
+	if data, err := os.ReadFile(diskPath); err == nil {
+		return ini.Load(data)
+	}
+	if len(embedded) > 0 {
+		return ini.Load(embedded)
+	}
+	return nil, fmt.Errorf("%s not found in %s and no embedded fallback", filename, getExeDir())
+}
 
-	// Defaults for the model in case .ini file can't be read
+func loadConfig() Config {
+	// Defaults for the model in case defaults.ini can't be read at all
+	// (no disk file, no embedded fallback).
 	cfg := Config{
 		Model:       "claude-haiku-4-5-20251001",
 		Temperature: 0.3,
 		MaxTokens:   4096,
 	}
 
-	// Load defaults.ini
-	defaultsPath := filepath.Join(exeDir, "defaults.ini")
-	if iniFile, err := ini.Load(defaultsPath); err == nil {
+	// Load defaults.ini — disk overrides embedded.
+	if iniFile, err := loadIniDiskOrEmbedded("defaults.ini", embeddedDefaultsIni); err == nil {
 		if key, err := iniFile.Section("model").GetKey("name"); err == nil {
 			cfg.Model = key.String()
 		}
@@ -96,17 +131,16 @@ func loadConfig() Config {
 		}
 	}
 
-	// Load API key from secrets.ini
-	secretsPath := filepath.Join(exeDir, "secrets.ini")
-	if iniFile, err := ini.Load(secretsPath); err == nil {
+	// Load API key from secrets.ini — disk overrides embedded.
+	if iniFile, err := loadIniDiskOrEmbedded("secrets.ini", embeddedSecretsIni); err == nil {
 		if key, err := iniFile.Section("api").GetKey("key"); err == nil {
 			cfg.APIKey = key.String()
 		}
 	}
 
-	// Load prompts from prompts.ini
-	promptsPath := filepath.Join(exeDir, "prompts.ini")
-	promptsFile, err := ini.Load(promptsPath)
+	// Load prompts.ini — disk overrides embedded. Required: assert if
+	// the embedded fallback is also missing or malformed.
+	promptsFile, err := loadIniDiskOrEmbedded("prompts.ini", embeddedPromptsIni)
 	assert(err == nil, fmt.Sprintf("Failed to load prompts.ini: %v", err))
 	promptsSec := promptsFile.Section("prompts")
 	cfg.SystemPrompt = promptsSec.Key("system").String()
@@ -132,23 +166,34 @@ func getExeDir() string {
 
 // LLM config is loaded the first time an LLM hotkey is invoked so users
 // who don't have prompts.ini / secrets.ini set up can still use the
-// non-LLM hotkeys without the program panicking at startup.
+// non-LLM hotkeys without the program panicking at startup. Successful
+// loads are cached; failures are NOT cached, so the user can fix a
+// missing file and retry the hotkey without restarting.
 var (
-	llmCfgOnce sync.Once
-	llmCfg     Config
-	llmCfgErr  error
+	llmCfgMu sync.Mutex
+	llmCfg   Config
+	llmCfgOK bool
 )
 
 func getLLMConfig() (Config, error) {
-	llmCfgOnce.Do(func() {
+	llmCfgMu.Lock()
+	defer llmCfgMu.Unlock()
+
+	if llmCfgOK {
+		return llmCfg, nil
+	}
+
+	var loadErr error
+	func() {
 		defer func() {
 			if r := recover(); r != nil {
-				llmCfgErr = fmt.Errorf("%v", r)
+				loadErr = fmt.Errorf("%v", r)
 			}
 		}()
 		llmCfg = loadConfig()
-	})
-	return llmCfg, llmCfgErr
+		llmCfgOK = true
+	}()
+	return llmCfg, loadErr
 }
 
 func queryClaude(cfg Config, userPrompt string, userInput string) (string, error) {

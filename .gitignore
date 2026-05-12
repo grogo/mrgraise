@@ -3,6 +3,8 @@
 #
 # Binaries for programs and plugins
 mrgraise.exe
+# don't upload binaries anymore since stuff is baked in.
+*.exe
 *.exe~
 *.dll
 *.so

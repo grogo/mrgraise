@@ -373,6 +373,15 @@ func runLLMOnSelectionAsync(generateImpression bool) {
 	// the synthesized Ctrl+C below isn't seen as Ctrl+Alt+C.
 	releaseHotkeyModifiers()
 
+	// Validate config up front so missing prompts.ini / secrets.ini /
+	// defaults.ini surfaces as a clean message instead of a downstream
+	// walk error from inside showLLMUI.
+	if _, err := getLLMConfig(); err != nil {
+		msg := strings.TrimPrefix(err.Error(), "assertion failed: ")
+		showError("Cannot load LLM config: " + msg + "\n\nmrgraise.exe needs defaults.ini, prompts.ini, and secrets.ini in the same directory as the executable.")
+		return
+	}
+
 	text, err := captureSelectionViaClipboard()
 	if err != nil {
 		showError("Clipboard error: " + err.Error())
