@@ -228,7 +228,7 @@ func processReportText(cfg Config, userInput string, generateImpression bool) {
 		paragraphs := numberParagraphs(stripMarkdown(removeNumbering(result)))
 		fmt.Printf("=============================\n")
 
-		fmt.Printf("ERRORS:\n %s\n\nIMPRESSION:\n %s\n\n", errs, paragraphs)
+		fmt.Printf("ERRORS:\n %s\n\nIMPRESSION:\n%s\n\n", errs, paragraphs)
 		if err := setClipboardText(paragraphs); err != nil {
 			showError("Clipboard error: " + err.Error())
 		}
