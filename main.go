@@ -5,6 +5,8 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -448,9 +450,11 @@ func showError(msg string) {
 
 // copyOrderInfoToClipboard locates the Order Viewer window, pulls the
 // patient fields from its title bar, and writes them to the clipboard
-// as a semicolon-separated record (Name;DOB;Loc;MRN;ACC). Shows a
-// Windows error dialog if the window is not open or the clipboard call
-// fails.
+// as a tab-separated record (Name\tDOB\tLoc\tMRN\tDate\tACC\tExam).
+// Also appends the record (prefixed with an ISO-8601 local timestamp)
+// to the save file resolved by savedAccessionsPath. Shows a Windows
+// error dialog if the window is not open or the clipboard call fails;
+// file-write errors are logged to stdout only.
 func copyOrderInfoToClipboard() {
 	hwnd := findWindowByPrefix("Order Viewer:")
 	if hwnd == 0 {
@@ -463,7 +467,46 @@ func copyOrderInfoToClipboard() {
 		showError("Clipboard error: " + err.Error())
 		return
 	}
-	// procMessageBeep.Call(MB_OK)
+	appendAccessionRecord(record)
+}
+
+// savedAccessionsPath returns the file path where each F6 copy is
+// appended. Resolution order: [save] accessions_file in defaults.ini,
+// then %USERPROFILE%\Documents\saved_accessions.txt.
+func savedAccessionsPath() string {
+	if iniFile, err := loadIniDiskOrEmbedded("defaults.ini", embeddedDefaultsIni); err == nil {
+		if key, err := iniFile.Section("save").GetKey("accessions_file"); err == nil {
+			if v := strings.TrimSpace(key.String()); v != "" {
+				return v
+			}
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "saved_accessions.txt"
+	}
+	return filepath.Join(home, "Documents", "saved_accessions.txt")
+}
+
+// appendAccessionRecord appends one tab-separated record, preceded by
+// an ISO-8601 local timestamp, as a new line to the save file. Errors
+// are logged to stdout — the clipboard copy succeeds independently.
+func appendAccessionRecord(record string) {
+	path := savedAccessionsPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		fmt.Printf("saved_accessions: cannot create %s: %v\n", filepath.Dir(path), err)
+		return
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		fmt.Printf("saved_accessions: cannot open %s: %v\n", path, err)
+		return
+	}
+	defer f.Close()
+	line := time.Now().Format("2006-01-02T15:04:05") + "\t" + record + "\n"
+	if _, err := f.WriteString(line); err != nil {
+		fmt.Printf("saved_accessions: cannot write to %s: %v\n", path, err)
+	}
 }
 
 func restoreIfMinimized(hwnd uintptr) {
