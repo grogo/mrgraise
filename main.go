@@ -518,13 +518,25 @@ func savedAccessionsPath() string {
 }
 
 // appendAccessionRecord appends one tab-separated record, preceded by
-// an ISO-8601 local timestamp, as a new line to the save file. Errors
-// are logged to stdout — the clipboard copy succeeds independently.
+// an ISO-8601 local timestamp, as a new line to the save file. If the
+// existing file does not end in a newline, one is inserted first so
+// the new entry doesn't run onto the prior partial line. Errors are
+// logged to stdout — the clipboard copy succeeds independently.
 func appendAccessionRecord(record string) {
 	path := savedAccessionsPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		fmt.Printf("saved_accessions: cannot create %s: %v\n", filepath.Dir(path), err)
 		return
+	}
+	needsLeadingNewline := false
+	if info, err := os.Stat(path); err == nil && info.Size() > 0 {
+		if rf, err := os.Open(path); err == nil {
+			var b [1]byte
+			if _, err := rf.ReadAt(b[:], info.Size()-1); err == nil && b[0] != '\n' {
+				needsLeadingNewline = true
+			}
+			rf.Close()
+		}
 	}
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -533,6 +545,9 @@ func appendAccessionRecord(record string) {
 	}
 	defer f.Close()
 	line := time.Now().Format("2006-01-02T15:04:05") + "\t" + record + "\n"
+	if needsLeadingNewline {
+		line = "\n" + line
+	}
 	if _, err := f.WriteString(line); err != nil {
 		fmt.Printf("saved_accessions: cannot write to %s: %v\n", path, err)
 	}
