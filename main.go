@@ -348,7 +348,7 @@ func releaseHotkeyModifiers() {
 func renumberSelectionViaClipboard() {
 	result, err := captureSelectionViaClipboard()
 	if err != nil {
-		showError("Clipboard error: " + err.Error())
+		showError("Clipboard error: " + err.Error() + "\n\nPlease select text first before running this shortcut.")
 		return
 	}
 	if strings.TrimSpace(result) == "" {
@@ -357,7 +357,7 @@ func renumberSelectionViaClipboard() {
 
 	out := numberParagraphs(stripMarkdown(removeNumbering(result))) + "\n"
 	if err := setClipboardText(out); err != nil {
-		showError("Clipboard error: " + err.Error())
+		showError("Clipboard error: " + err.Error() + "\n\nPlease select text first before running this shortcut.")
 		return
 	}
 
@@ -384,7 +384,7 @@ func runLLMOnSelectionAsync(generateImpression bool) {
 
 	text, err := captureSelectionViaClipboard()
 	if err != nil {
-		showError("Clipboard error: " + err.Error())
+		showError("Clipboard error: " + err.Error() + "\n\nPlease select text first before running this shortcut.")
 		return
 	}
 	if strings.TrimSpace(text) == "" {
