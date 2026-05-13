@@ -53,6 +53,7 @@ var (
 	procMessageBeep         = user32.NewProc("MessageBeep")
 	procKeybdEvent          = user32.NewProc("keybd_event")
 	procGetAsyncKeyState    = user32.NewProc("GetAsyncKeyState")
+	procGetSystemMetrics    = user32.NewProc("GetSystemMetrics")
 	procGlobalAlloc         = kernel32.NewProc("GlobalAlloc")
 	procGlobalLock          = kernel32.NewProc("GlobalLock")
 	procGlobalUnlock        = kernel32.NewProc("GlobalUnlock")
@@ -78,6 +79,11 @@ const (
 	SWP_NOMOVE     = 0x0002      // Retains current position
 	SWP_NOACTIVATE = 0x0010      // Does NOT activate the window (no focus steal)
 	SWP_SHOWWINDOW = 0x0040      // Displays the window
+
+	// GetSystemMetrics indexes for the primary monitor size, used to
+	// center the extra-info prompt dialog.
+	SM_CXSCREEN = 0
+	SM_CYSCREEN = 1
 
 	WH_KEYBOARD_LL = 13
 	WM_KEYDOWN     = 0x0100
@@ -486,10 +492,13 @@ func showError(msg string) {
 // copyOrderInfoToClipboard locates the Order Viewer window, pulls the
 // patient fields from its title bar, and writes them to the clipboard
 // as a tab-separated record (Name\tDOB\tLoc\tMRN\tDate\tACC\tExam).
-// Also appends the record (prefixed with an ISO-8601 local timestamp)
-// to the save file resolved by savedAccessionsPath. Shows a Windows
-// error dialog if the window is not open or the clipboard call fails;
-// file-write errors are logged to stdout only.
+// When --save-accessions is on, also prompts the user for optional
+// extra information, appends it as a final tab-separated column to
+// both the clipboard text and the saved-accessions log line, and
+// appends the resulting record (prefixed with an ISO-8601 local
+// timestamp) to the save file resolved by savedAccessionsPath. Shows
+// a Windows error dialog if the window is not open or the clipboard
+// call fails; file-write errors are logged to stdout only.
 func copyOrderInfoToClipboard() {
 	hwnd := findWindowByPrefix("Order Viewer:")
 	if hwnd == 0 {
@@ -497,14 +506,34 @@ func copyOrderInfoToClipboard() {
 		return
 	}
 	name, dob, loc, mrn, date, acc, exam := parseOrderViewerTitle(getWindowText(hwnd))
-	record := strings.Join([]string{name, dob, loc, mrn, date, acc, exam}, "\t")
-	if err := setClipboardText(record); err != nil {
-		showError("Clipboard error: " + err.Error())
+	baseFields := []string{name, dob, loc, mrn, date, acc, exam}
+
+	if !saveAccessions {
+		record := strings.Join(baseFields, "\t")
+		if err := setClipboardText(record); err != nil {
+			showError("Clipboard error: " + err.Error())
+		}
 		return
 	}
-	if saveAccessions {
+
+	// With --save-accessions on, prompt for optional extra info, then
+	// set the clipboard and append to the log. Runs on its own
+	// goroutine so the dialog doesn't block the main pin-ticker. The
+	// clipboard is only set after the dialog returns, so the user
+	// must wait until then to paste.
+	go func() {
+		extra, canceled := promptForExtraInfo()
+		fields := baseFields
+		if !canceled && extra != "" {
+			fields = append(fields, extra)
+		}
+		record := strings.Join(fields, "\t")
+		if err := setClipboardText(record); err != nil {
+			showError("Clipboard error: " + err.Error())
+			return
+		}
 		appendAccessionRecord(record)
-	}
+	}()
 }
 
 // savedAccessionsPath returns the file path where each F6 copy is

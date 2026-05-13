@@ -266,3 +266,104 @@ func normalizeNewlines(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	return strings.ReplaceAll(s, "\n", "\r\n")
 }
+
+const (
+	extraInfoWinW = 640
+	extraInfoWinH = 200
+)
+
+// promptForExtraInfo shows a small topmost dialog with a single-line
+// text entry and OK / Cancel buttons. Returns the trimmed entered text
+// and whether the user canceled. Enter submits, Escape cancels, and
+// closing the window via [X] is treated as cancel. Blocks the calling
+// goroutine until the dialog is dismissed; locks the OS thread for
+// walk's message loop, so callers should run this on a dedicated
+// goroutine.
+func promptForExtraInfo() (text string, canceled bool) {
+	runtime.LockOSThread()
+	canceled = true // covers the [X]-close path
+
+	var (
+		win  *walk.MainWindow
+		edit *walk.LineEdit
+	)
+
+	submit := func() {
+		text = strings.TrimSpace(edit.Text())
+		canceled = false
+		win.Close()
+	}
+	cancel := func() {
+		canceled = true
+		win.Close()
+	}
+
+	mw := decl.MainWindow{
+		AssignTo: &win,
+		Title:    "mrgraise",
+		Font:     decl.Font{PointSize: uiFontPointSize},
+		MinSize:  decl.Size{Width: extraInfoWinW, Height: extraInfoWinH},
+		MaxSize:  decl.Size{Width: extraInfoWinW, Height: extraInfoWinH},
+		Size:     decl.Size{Width: extraInfoWinW, Height: extraInfoWinH},
+		Visible:  false,
+		Layout:   decl.VBox{},
+		Children: []decl.Widget{
+			decl.Label{
+				Text: "Add optional additional information to log about this case:",
+			},
+			decl.LineEdit{
+				AssignTo: &edit,
+				OnKeyDown: func(key walk.Key) {
+					switch key {
+					case walk.KeyReturn:
+						submit()
+					case walk.KeyEscape:
+						cancel()
+					}
+				},
+			},
+			decl.Composite{
+				Layout: decl.HBox{},
+				Children: []decl.Widget{
+					decl.HSpacer{},
+					decl.PushButton{
+						Text:      "OK",
+						OnClicked: submit,
+					},
+					decl.PushButton{
+						Text:      "Cancel",
+						OnClicked: cancel,
+					},
+				},
+			},
+		},
+	}
+	if x, y, ok := centerOnPrimaryScreen(extraInfoWinW, extraInfoWinH); ok {
+		mw.Bounds = decl.Rectangle{X: x, Y: y, Width: extraInfoWinW, Height: extraInfoWinH}
+	}
+	if err := mw.Create(); err != nil {
+		showError("UI error: " + err.Error())
+		return "", true
+	}
+	win.Show()
+	setTopmost(win)
+	stop := make(chan struct{})
+	keepTopmost(win, stop)
+	edit.SetFocus()
+	win.Run()
+	close(stop)
+	return text, canceled
+}
+
+// centerOnPrimaryScreen returns the top-left coordinates that center a
+// (w, h) window on the primary monitor. The ok return is false when
+// GetSystemMetrics reports a zero-sized screen (shouldn't happen on a
+// real desktop, but lets the caller fall back to the OS default).
+func centerOnPrimaryScreen(w, h int) (int, int, bool) {
+	sw, _, _ := procGetSystemMetrics.Call(SM_CXSCREEN)
+	sh, _, _ := procGetSystemMetrics.Call(SM_CYSCREEN)
+	if sw == 0 || sh == 0 {
+		return 0, 0, false
+	}
+	return (int(sw) - w) / 2, (int(sh) - h) / 2, true
+}
