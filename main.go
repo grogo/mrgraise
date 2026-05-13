@@ -19,6 +19,12 @@ import (
 // cycle handler. Off by default.
 var debug bool
 
+// saveAccessions is set by -s/--save-accessions and gates the F6
+// append-to-disk behavior in copyOrderInfoToClipboard. Off by default;
+// the [save] accessions_file ini key controls where to save when this
+// is enabled but does not enable saving on its own.
+var saveAccessions bool
+
 func debugf(format string, args ...any) {
 	if debug {
 		fmt.Printf(format, args...)
@@ -496,7 +502,9 @@ func copyOrderInfoToClipboard() {
 		showError("Clipboard error: " + err.Error())
 		return
 	}
-	appendAccessionRecord(record)
+	if saveAccessions {
+		appendAccessionRecord(record)
+	}
 }
 
 // savedAccessionsPath returns the file path where each F6 copy is
@@ -720,6 +728,8 @@ func main() {
 
 	flag.BoolVar(&debug, "debug", false, "enable verbose debug output for the F5 cycle handler")
 	flag.BoolVar(&debug, "d", false, "shorthand for --debug")
+	flag.BoolVar(&saveAccessions, "save-accessions", false, "append each F6 copy to the save file (off by default)")
+	flag.BoolVar(&saveAccessions, "s", false, "shorthand for --save-accessions")
 	flag.Parse()
 
 	fmt.Printf("Pinning to top: %s\n", WIN_TITLE)
