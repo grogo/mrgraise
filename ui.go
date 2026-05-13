@@ -18,11 +18,11 @@ import (
 const (
 	// 3x the default UI font (Segoe UI 9pt). Set on the MainWindow so
 	// child Label / TextEdit / PushButton inherit it.
-	uiFontPointSize = 20
+	uiFontPointSize = 18
 
 	askingWinW = 400
 	askingWinH = 100
-	resultWinW = 1100
+	resultWinW = 900
 	resultWinH = 750
 )
 
