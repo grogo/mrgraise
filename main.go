@@ -97,6 +97,7 @@ const (
 
 	VK_F5      = 0x74
 	VK_F6      = 0x75
+	VK_F7      = 0x76
 	VK_F8      = 0x77
 	VK_CONTROL = 0x11
 	VK_MENU    = 0x12 // Alt
@@ -273,6 +274,17 @@ func parseOrderViewerTitle(title string) (name, dob, loc, mrn, date, acc, exam s
 		exam = parts[len(parts)-2]
 	}
 	return
+}
+
+// findOrderInfoWindow returns the hwnd of the Order Viewer window
+// (preferred) or, failing that, the first top-level window whose title
+// parses into a record with a valid ACC and date. Returns 0 if neither
+// can be located.
+func findOrderInfoWindow() uintptr {
+	if hwnd := findWindowByPrefix("Order Viewer:"); hwnd != 0 {
+		return hwnd
+	}
+	return findOrderInfoWindowFallback()
 }
 
 // findOrderInfoWindowFallback scans every top-level window and returns
@@ -520,10 +532,7 @@ func showError(msg string) {
 // a Windows error dialog if the window is not open or the clipboard
 // call fails; file-write errors are logged to stdout only.
 func copyOrderInfoToClipboard() {
-	hwnd := findWindowByPrefix("Order Viewer:")
-	if hwnd == 0 {
-		hwnd = findOrderInfoWindowFallback()
-	}
+	hwnd := findOrderInfoWindow()
 	if hwnd == 0 {
 		showError("Warning: F6 copy failed because Order Viewer window was not found. Please open the Order Viewer window in Merge first.")
 		return
@@ -557,6 +566,23 @@ func copyOrderInfoToClipboard() {
 		}
 		appendAccessionRecord(record)
 	}()
+}
+
+// copyNameDobToClipboard locates an Order Viewer (or fallback) window
+// and writes only "<name> <dob>" to the clipboard. Does not save to
+// the log file and does not prompt for extra info. Shows a Windows
+// error dialog if no matching window is open or the clipboard call
+// fails.
+func copyNameDobToClipboard() {
+	hwnd := findOrderInfoWindow()
+	if hwnd == 0 {
+		showError("Warning: F7 copy failed because Order Viewer window was not found. Please open the Order Viewer window in Merge first.")
+		return
+	}
+	name, dob, _, _, _, _, _ := parseOrderViewerTitle(getWindowText(hwnd))
+	if err := setClipboardText(name + " " + dob); err != nil {
+		showError("Clipboard error: " + err.Error())
+	}
 }
 
 // savedAccessionsPath returns the file path where each F6 copy is
@@ -664,15 +690,17 @@ func keyboardHookProc(nCode uintptr, wParam uintptr, lParam uintptr) uintptr {
 			switch wParam {
 			case WM_KEYDOWN, WM_SYSKEYDOWN:
 				switch k.vkCode {
-				case VK_F5, VK_F6, VK_F8:
+				case VK_F5, VK_F6, VK_F7, VK_F8:
 					select {
 					case keyEvents <- k.vkCode:
 					default:
 					}
-					// F8 is bound to a clipboard action — swallow it so the
-					// focused app (which the synthesized Ctrl+C will target)
-					// does not also see F8 and clobber the selection.
-					if k.vkCode == VK_F8 {
+					// F7/F8 trigger our own clipboard actions — swallow
+					// them so the focused app doesn't also react (in F8's
+					// case its Ctrl+C synthesis would clobber the
+					// selection; F7 is silenced for symmetry / to avoid
+					// any default F7 binding in Merge).
+					if k.vkCode == VK_F7 || k.vkCode == VK_F8 {
 						return 1
 					}
 				case VK_S, VK_C:
@@ -687,7 +715,7 @@ func keyboardHookProc(nCode uintptr, wParam uintptr, lParam uintptr) uintptr {
 					}
 				}
 			case WM_KEYUP, WM_SYSKEYUP:
-				if k.vkCode == VK_F8 {
+				if k.vkCode == VK_F7 || k.vkCode == VK_F8 {
 					return 1
 				}
 			}
@@ -791,12 +819,14 @@ In order for this shortcut to work, enable 'Auto Open Order Viewer', 'Auto Open 
 	fmt.Println()
 	fmt.Println("Hotkey: F6 copies patient info (Name;DOB;Loc;MRN;Date;ACC;Exam) from Order Viewer to the clipboard.")
 	fmt.Println()
+	fmt.Println("Hotkey: F7 copies only the patient name and date of birth from Order Viewer to the clipboard.")
+	fmt.Println()
 	fmt.Println("Hotkey: F8 takes the currently selected text, strips any prior numbering, and pastes it back with paragraphs renumbered and properly formatted.")
 	fmt.Println()
-	fmt.Println("Hotkey: Ctrl+Alt+S sends the currently selected report text to Claude to generate an impression and places it on the clipboard (Ctrl+V to paste).")
-	fmt.Println()
-	fmt.Println("Hotkey: Ctrl+Alt+C sends the currently selected report text to Claude to check for errors and prints the result here.")
-	fmt.Println()
+	//fmt.Println("Hotkey: Ctrl+Alt+S sends the currently selected report text to Claude to generate an impression and places it on the clipboard (Ctrl+V to paste).")
+	//fmt.Println()
+	//fmt.Println("Hotkey: Ctrl+Alt+C sends the currently selected report text to Claude to check for errors and prints the result here.")
+	//fmt.Println()
 	fmt.Println("It's ok to minimize this window to the task bar, or keep it in the background, but do not close it.")
 	fmt.Println()
 	fmt.Println("To quit, press Ctrl-C, or click the [X] in the top right corner.")
@@ -883,6 +913,8 @@ In order for this shortcut to work, enable 'Auto Open Order Viewer', 'Auto Open 
 				lastF5 = time.Now()
 			case VK_F6:
 				copyOrderInfoToClipboard()
+			case VK_F7:
+				copyNameDobToClipboard()
 			case VK_F8:
 				renumberSelectionViaClipboard()
 			case VK_S:
