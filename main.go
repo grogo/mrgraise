@@ -275,6 +275,26 @@ func parseOrderViewerTitle(title string) (name, dob, loc, mrn, date, acc, exam s
 	return
 }
 
+// findOrderInfoWindowFallback scans every top-level window and returns
+// the hwnd of the first whose title parses (via parseOrderViewerTitle)
+// into a record that contains both a valid ACC number and a valid
+// service date. Used by copyOrderInfoToClipboard when the
+// "Order Viewer:" prefix search fails but another Merge window exposes
+// the same pipe-separated patient fields. Returns 0 if no match exists.
+func findOrderInfoWindowFallback() uintptr {
+	for _, hwnd := range findAllWindowsByPrefix("") {
+		title := getWindowText(hwnd)
+		if title == "" {
+			continue
+		}
+		_, _, _, _, date, acc, _ := parseOrderViewerTitle(title)
+		if acc != "" && date != "" {
+			return hwnd
+		}
+	}
+	return 0
+}
+
 // setClipboardText places text on the Windows clipboard as
 // CF_UNICODETEXT. On success the global memory block is owned by the
 // clipboard and must not be freed here.
@@ -501,6 +521,9 @@ func showError(msg string) {
 // call fails; file-write errors are logged to stdout only.
 func copyOrderInfoToClipboard() {
 	hwnd := findWindowByPrefix("Order Viewer:")
+	if hwnd == 0 {
+		hwnd = findOrderInfoWindowFallback()
+	}
 	if hwnd == 0 {
 		showError("Warning: F6 copy failed because Order Viewer window was not found. Please open the Order Viewer window in Merge first.")
 		return
